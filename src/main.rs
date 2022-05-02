@@ -50,9 +50,9 @@ impl GenericTransform for ResizeGrayImage {
         match input {
             ImageTransformResult::GrayImage(image) => Ok(resize(
                 &image,
-                (self.image_size.width * (64 / self.image_size.height)) as u32,
-                64,
-                FilterType::Triangle,
+                self.image_size.width as u32,
+                self.image_size.height as u32,
+                FilterType::CatmullRom,
             ).into()),
             ImageTransformResult::Tensor(_) => Err("Image resize not implemented for Tensor"),
             ImageTransformResult::Array4(_) => Err("Image resize not implemented for Array4"),
@@ -129,7 +129,6 @@ struct Normalization {
 
 impl GenericTransform for Normalization {
     fn transform(&self, input: ImageTransformResult) -> Result<ImageTransformResult, &'static str> {
-        println!("Normalization");
         match input {
             ImageTransformResult::GrayImage(_) => Err("Not implemented"),
             ImageTransformResult::Tensor(_) => Err("Not implemented"),
@@ -183,7 +182,7 @@ impl GenericTransform for ToArray {
                 let shape = image.dimensions();
                 let arr = tract_ndarray::Array4::from_shape_fn(
                     (1_usize, 1_usize, shape.1 as usize, shape.0 as usize),
-                    |(_, c, y, x)| image[(x as _, y as _)][c] as f32 / 255.,
+                    |(_, c, y, x)| ((image[(x as _, y as _)][c] as f32 / 255.) - 0.5) / 0.5,
                 );
                 Ok(ImageTransformResult::Array4(arr))
             }
@@ -283,7 +282,13 @@ impl TransformationPipeline {
     fn new(image_size: ImageSize) -> Self{
         TransformationPipeline{
             steps: vec![
-                ResizeGrayImage { image_size: ImageSize { width: image_size.width, height: image_size.height }, filter: FilterType::Nearest }.into(),
+                ResizeGrayImage {
+                    image_size: ImageSize {
+                        width: image_size.width,
+                        height: image_size.height,
+                    },
+                    filter: FilterType::CatmullRom,
+                }.into(),
                 ToArray {}.into(),
                 ToTensor {}.into(),
             ],
@@ -297,7 +302,7 @@ impl TransformationPipeline {
             println!("{} is not find", name);
             std::process::exit(-1)
         }
-        let input_shape = tvec!(1, 1, 64, image_size.width);
+        let input_shape = tvec!(1, 1, image_size.height, image_size.width);
         let mut model = tract_onnx::onnx()
             .model_for_path(name)
             .expect("Cannot read model")
@@ -860,14 +865,20 @@ fn main() {
     let args = env::args().nth(1).expect("no image path");
     let image = image::open(args).unwrap().to_luma8();
     let image_size = ImageSize{
-        width: image.width() as usize,
-        height: image.height() as usize
+        width: (image.width() as f32 * (64_f32 / image.height() as f32)) as usize,
+        height: 64,
     };
     let _model =  TransformationPipeline::new(image_size);
     let res = _model.extract_features(image);
     let mut result = String::from("");
+    let mut last_item:i64 = 0;
     for i in res.unwrap() {
+        if i == last_item {
+            continue
+        }else{
+            last_item = i
+        }
         result.push_str(charset[i as usize])
     }
-    println!("---------------->{:?}", result);
+    println!("---------------->{:?}",result);
 }
